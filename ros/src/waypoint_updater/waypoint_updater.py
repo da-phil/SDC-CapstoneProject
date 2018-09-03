@@ -30,6 +30,9 @@ class WaypointUpdater(object):
     def __init__(self):
         rospy.init_node('waypoint_updater')
 
+        # only start when waypoint publisher started!
+        #msg = rospy.wait_for_message('/base_waypoints', Lane)
+
         rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
 
@@ -45,6 +48,7 @@ class WaypointUpdater(object):
         self.base_waypoints = None
         self.pose = None
         #rospy.spin()
+
         self.start()
         
     def start(self):
@@ -54,12 +58,17 @@ class WaypointUpdater(object):
             if self.pose and self.base_waypoints:
                 # get closest waypoint
                 closest_waypoint_idx = self.get_closest_waypoint_idx()
-                self.publish_waypoints(closest_waypoint_idx)
+                if closest_waypoint_idx != None:
+                    self.publish_waypoints(closest_waypoint_idx)
             rate.sleep()
 
     def get_closest_waypoint_idx(self):
+        if self.waypoint_tree == None:
+            return None
+
         x = self.pose.pose.position.x
-        y = self.pose.pose.position.y        
+        y = self.pose.pose.position.y
+        
         closest_idx = self.waypoint_tree.query([x, y], 1)[1]
 
         # check if closest waypoint is ahead or behind the car
@@ -87,7 +96,7 @@ class WaypointUpdater(object):
     def waypoints_cb(self, waypoints):
         #self.final_waypoints_pub.publish(waypoints)
         self.base_waypoints = waypoints
-        if not self.waypoints_2d:
+        if self.waypoints_2d == None:
             self.waypoints_2d = [[waypoint.pose.pose.position.x, waypoint.pose.pose.position.y]
                                  for waypoint in waypoints.waypoints]
             self.waypoint_tree = KDTree(self.waypoints_2d)
