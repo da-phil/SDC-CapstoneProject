@@ -26,14 +26,14 @@ class TLClassifier(object):
         self.lower_red_2 = np.array([170,  70,  50], dtype = "uint8")
         self.upper_red_2 = np.array([180, 255, 255], dtype = "uint8")
 
-        self.category_index = {0: {"id": 0, "name": "red"},
-                               1: {"id": 1, "name": "yellow"},
-                               2: {"id": 2, "name": "green"},
-                               3: {"id": 3, "name": "unknown"},
-                               4: {"id": 4, "name": "unknown"}}  
+        self.category_index = [{"id": 0, "name": "red"},
+                               {"id": 1, "name": "yellow"},
+                               {"id": 2, "name": "green"},
+                               {"id": 3, "name": "unknown"},
+                               {"id": 4, "name": "unknown"}]  
 
         self.find_color_idx = lambda color: next((self.category_index[i]["id"]
-                                            for i in range(len(self.category_index.keys()))
+                                            for i in range(len(self.category_index))
                                             if self.category_index[i]["name"] == color.lower()), 3)
 
         os.chdir(cwd)
@@ -110,21 +110,6 @@ class TLClassifier(object):
             classes = np.squeeze(classes)
             scores = np.squeeze(scores)
 
-            if visual == True:
-                vis_util.visualize_boxes_and_labels_on_image_array(
-                    image,
-                    bboxes,
-                    classes.astype(np.int32),
-                    scores,
-                    self.category_index,
-                    use_normalized_coordinates=True, min_score_thresh=.2,
-                    line_thickness=3)
-
-                plt.figure(figsize=(9,6))
-                plt.imshow(image)
-                plt.show()
-
-
             cls = classes.tolist()
             #print("Classes: ", classes)
 
@@ -151,7 +136,7 @@ class TLClassifier(object):
                 bbox = self.bbox_normal_to_pixel(bboxes[idx], dim)
                 bbox_h = bbox[2] - bbox[0]
                 bbox_w = bbox[3] - bbox[1]
-                ratio  = bbox_h / (bbox_w + 0.01)
+                ratio  = bbox_h / (bbox_w + 1e-3)
                 
                 # if the bbox is too small, 20 pixels for simulator
                 if bbox_h < 20 or bbox_w < 20:
@@ -175,18 +160,19 @@ class TLClassifier(object):
 
 
     def get_trafficlight_color(self, image):
-        brightness_threshold = 128
-        red_vals, green_vals = image[:,:,0].ravel(), image[:,:,1].ravel()
-        red_pix_count = np.where(red_vals >= brightness_threshold)[0].shape[0]
-        green_pix_count = np.where(green_vals >= brightness_threshold)[0].shape[0]
-        red_pix_percentage = 1.0*red_pix_count / red_vals.shape[0]
-        green_pix_percentage = 1.0*green_pix_count / green_vals.shape[0]
+        brightness_threshold    = 128
 
-        brightness = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)[:,:,2] 
-        hs, ws  = np.where(brightness >= (brightness.max()-50))
-        tl_h    = image.shape[0]
-        hs_mean = hs.mean()
-        hs_mean_norm = hs_mean / tl_h
+        red_vals, green_vals    = image[:,:,0].ravel(), image[:,:,1].ravel()
+        red_pix_count           = np.where(red_vals >= brightness_threshold)[0].shape[0]
+        green_pix_count         = np.where(green_vals >= brightness_threshold)[0].shape[0]
+        red_pix_percentage      = 1.0*red_pix_count / red_vals.shape[0]
+        green_pix_percentage    = 1.0*green_pix_count / green_vals.shape[0]
+
+        brightness      = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)[:,:,2] 
+        hs, ws          = np.where(brightness >= (brightness.max()-50))
+        tl_h            = image.shape[0]
+        hs_mean         = hs.mean()
+        hs_mean_norm    = hs_mean / tl_h
 
         # final classifier value is the vertical brightness distribution skewed up or down
         # by the percentage of red (minus -> upwards) and green (plus -> downwards) pixels
@@ -200,7 +186,7 @@ class TLClassifier(object):
 
         if classifier <= 0.45:
             signal_id = self.find_color_idx("red")
-        elif classifier >= 0.62:
+        elif classifier >= 0.60:
             signal_id = self.find_color_idx("green")
         else:
             signal_id = self.find_color_idx("yellow")
