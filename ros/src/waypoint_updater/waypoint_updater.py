@@ -2,7 +2,8 @@
 
 import rospy
 import numpy as np
-from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Int32
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from styx_msgs.msg import Lane, Waypoint
 
 import math
@@ -33,27 +34,28 @@ class WaypointUpdater(object):
         # only start when waypoint publisher started!
         #msg = rospy.wait_for_message('/base_waypoints', Lane)
 
-        rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
-        rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
-
-        # TODO: Add a subscriber for /traffic_waypoint and /obstacle_waypoint below
-        #rospy.Subscriber('/traffic_waypoint', Lane, self.traffic_cb)
-        #rospy.Subscriber('/obstacle_waypoint', Lane, self.obstacle_cb)
-
+        self.decel_limit = rospy.get_param('~decel_limit', -5)
+        self.accel_limit = rospy.get_param('~accel_limit', 1.)
         self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
-
-        # TODO: Add other member variables you need below
         self.waypoints_2d = None
         self.waypoint_tree = None
         self.base_waypoints = None
         self.pose = None
-        #rospy.spin()
+        self.cur_velocity = None
+        self.traffic_waypoint_idx = None
+        self.obstacle_waypoint_idx = None
+
+        rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
+        rospy.Subscriber('/current_velocity', TwistStamped, self.velocity_cb)
+        rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
+        rospy.Subscriber('/traffic_waypoint', Int32, self.traffic_cb)
+        rospy.Subscriber('/obstacle_waypoint', Int32, self.obstacle_cb)
 
         self.start()
         
     def start(self):
         rospy.loginfo('Starting start() function')
-        rate = rospy.Rate(50)
+        rate = rospy.Rate(25)
         while not rospy.is_shutdown():
             if self.pose and self.base_waypoints:
                 # get closest waypoint
@@ -69,29 +71,68 @@ class WaypointUpdater(object):
         x = self.pose.pose.position.x
         y = self.pose.pose.position.y
         
-        closest_idx = self.waypoint_tree.query([x, y], 1)[1]
+        closest_waypoint_idx = self.waypoint_tree.query([x, y], 1)[1]
 
         # check if closest waypoint is ahead or behind the car
-        closest_coord = self.waypoints_2d[closest_idx]
-        prev_coord = self.waypoints_2d[closest_idx - 1]
+        closest_coord = self.waypoints_2d[closest_waypoint_idx]
+        prev_coord = self.waypoints_2d[closest_waypoint_idx - 1]
 
-        cur_vec = np.asarray(closest_coord)
+        cur_vec  = np.asarray(closest_coord)
         prev_vec = np.array(prev_coord)
-        pos_vec = np.array([x, y])
+        pos_vec  = np.array([x, y])
 
         val = np.dot(cur_vec - prev_vec, pos_vec - cur_vec)
         if val > 0:
-            closest_idx = (closest_idx + 1) % len(self.waypoints_2d)
-        return closest_idx
+            closest_waypoint_idx = (closest_waypoint_idx + 1) % len(self.waypoints_2d)
+        return closest_waypoint_idx
 
-    def publish_waypoints(self, closest_idx):
+    def publish_waypoints(self, closest_waypoint_idx):
         lane = Lane()
-        lane.header = self.base_waypoints.header
-        lane.waypoints = self.base_waypoints.waypoints[closest_idx:closest_idx+LOOKAHEAD_WPS]
+        farthest_idx   = closest_waypoint_idx+LOOKAHEAD_WPS
+        base_waypoints = self.base_waypoints.waypoints[closest_waypoint_idx:farthest_idx]
+
+        if self.traffic_waypoint_idx and (0 <= self.traffic_waypoint_idx <= farthest_idx):
+            lane.waypoints = self.decelerate_waypoints(base_waypoints, closest_waypoint_idx)
+        else:
+            self.set_stop_waypoints = False
+            lane.waypoints = base_waypoints
+
         self.final_waypoints_pub.publish(lane)
+
+    def decelerate_waypoints(self, waypoints, closest_waypoint_idx):
+        cur_stop_waypoints = []
+        velocity_init = waypoints[0].twist.twist.linear.x
+        stop_idx = max(self.traffic_waypoint_idx - closest_waypoint_idx - int(self.cur_velocity.twist.linear.x * 2), 0)
+        
+        """
+        stop_idx = self.traffic_waypoint_idx - closest_waypoint_idx - int(self.cur_velocity.twist.linear.x * 1.5)
+        # wrap around from 0 to end
+        if stop_idx < 0:
+            stop_idx += len(waypoints)
+        """
+        rospy.logwarn("stop_wp: {}, rel_stop_wp before: {}, closest_idx: {}".format(self.traffic_waypoint_idx, stop_idx, closest_waypoint_idx))        
+        #rospy.logwarn("cur_wp: {}, stop_wp: {}, len(basic_wp): {}".format(0, stop_idx, len(waypoints)))
+
+        coeff = velocity_init / (self.distance(waypoints, 0, stop_idx) + 1e-3)
+        for i, wp in enumerate(waypoints):
+            p = Waypoint()
+            p.pose = wp.pose
+            dist = self.distance(waypoints, i, stop_idx)
+            #velocity_reduced = coeff*dist
+            velocity_reduced = math.sqrt(2 * abs(self.decel_limit) * dist)
+            if velocity_reduced < 1.0:
+                velocity_reduced = 0.0
+            #rospy.logwarn("Setting WP {} lower velocity: {} (old: {})".format(i, velocity_reduced, wp.twist.twist.linear.x))
+            p.twist.twist.linear.x = min(velocity_reduced, wp.twist.twist.linear.x)
+            cur_stop_waypoints.append(p)
+
+        return cur_stop_waypoints
 
     def pose_cb(self, msg):
         self.pose = msg
+
+    def velocity_cb(self, msg):
+        self.cur_velocity = msg
 
     def waypoints_cb(self, waypoints):
         #self.final_waypoints_pub.publish(waypoints)
@@ -102,12 +143,10 @@ class WaypointUpdater(object):
             self.waypoint_tree = KDTree(self.waypoints_2d)
 
     def traffic_cb(self, msg):
-        # TODO: Callback for /traffic_waypoint message. Implement
-        pass
+        self.traffic_waypoint_idx = int(msg.data)
 
     def obstacle_cb(self, msg):
-        # TODO: Callback for /obstacle_waypoint message. We will implement it later
-        pass
+        self.obstacle_waypoint_idx = int(msg.data)
 
     def get_waypoint_velocity(self, waypoint):
         return waypoint.twist.twist.linear.x

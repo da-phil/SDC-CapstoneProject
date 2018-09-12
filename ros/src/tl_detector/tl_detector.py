@@ -134,15 +134,17 @@ class TLDetector(object):
 
         cv_image = self.bridge.imgmsg_to_cv2(self.camera_image, "rgb8")
 
-        #Get classification
+        # Get classification
         signal, bbox = self.light_classifier.get_classification(cv_image)
 
+        # Publish detected bounding box area of traffic light for debug purpose, but only if there was a detection
         if not np.array_equal(bbox, np.zeros(4)):
             try:
                 ros_img = self.bridge.cv2_to_imgmsg(np.asarray(cv_image)[bbox[0]:bbox[2], bbox[1]:bbox[3]], encoding="rgb8")
                 self.light_image_bbox.publish(ros_img)
             except CvBridgeError as e:
                 print(e)
+
         return signal
 
     def process_traffic_lights(self):
@@ -162,7 +164,7 @@ class TLDetector(object):
         if self.pose and self.waypoints:
             car_wp_idx = self.get_closest_waypoint([self.pose.pose.position.x, self.pose.pose.position.y])
 
-            #TODO find the closest visible traffic light (if one exists)
+            # find the closest visible traffic light (if one exists)
             diff = len(self.waypoints.waypoints)
             for i, light in enumerate(self.lights):
                 # get stop line waypoint idx
