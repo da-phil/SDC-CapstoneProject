@@ -14,7 +14,7 @@ class Controller(object):
                  wheel_radius, wheel_base, steer_ratio,
                  max_lat_accel, max_steer_angle):
 
-        self.throttle_kp = 0.6
+        self.throttle_kp = 0.5
         self.throttle_ki = 0.1
         self.throttle_kd = 0.2
         self.throttle_min = 0.0 # min. throttle value
@@ -22,22 +22,26 @@ class Controller(object):
         self.throttle_controller = PID(self.throttle_kp, self.throttle_ki, self.throttle_kd,
                                        self.throttle_min, self.throttle_max)
 
-        min_speed = 10.
+        min_speed = 0.
         self.yaw_controller = YawController(wheel_base, steer_ratio, min_speed,
                                             max_lat_accel, max_steer_angle)
 
-        self.steer_kp = 0.8
-        self.steer_ki = 0.1
-        self.steer_kd = 0.3
+        tau = 0.01 # 1/(2*pi*tau) = filter cutoff frequency
+        ts = 0.02 # sample time
+        self.vel_lpf = LowPassFilter(tau, ts)
+
+        self.steer_kp = 4.
+        self.steer_ki = 0.05
+        self.steer_kd = 1.
         self.steer_min = -1.0 # min. steer value
         self.steer_max = 1.0 # max. steer value
         self.steer_controller = PID(self.steer_kp, self.steer_ki, self.steer_kd,
                                     self.steer_min, self.steer_max)
 
-
-        tau = 0.01 # 1/(2*pi*tau) = filter cutoff frequency
+        tau = 0.05 # 1/(2*pi*tau) = filter cutoff frequency
         ts = 0.02 # sample time
-        self.vel_lpf = LowPassFilter(tau, ts)
+        self.steering_lpf = LowPassFilter(tau, ts)
+
 
         self.vehicle_mass = vehicle_mass
         self.fuel_capacity = fuel_capacity
@@ -59,21 +63,23 @@ class Controller(object):
         sample_time = current_time - self.last_time
         self.last_time = current_time
 
-        #current_vel = self.vel_lpf.filt(current_vel)
-        #rospy.logwarn("Cur velocity value: {}".format(current_vel))
+        #steering = self.yaw_controller.get_steering(linear_vel_desired, angular_vel_desired, current_vel)
+        #steering = self.steer_controller.step(steering, sample_time)
+        #steering = self.steering_lpf.filt(steering)
 
-        steering = self.yaw_controller.get_steering(linear_vel_desired, angular_vel_desired, current_vel)
-        steering = self.steer_controller.step(steering, sample_time)
+        corrective_steer = self.steer_controller.step(angular_vel_desired, sample_time)
+        predictive_steer = self.yaw_controller.get_steering(linear_vel_desired, angular_vel_desired, current_vel)
+        steering = corrective_steer + predictive_steer
+        steering = self.steering_lpf.filt(steering)
 
-        #corrective_steer = self.steer_controller.step(angular_vel_desired, sample_time)
-        #predictive_steer = self.yaw_controller.get_steering(linear_vel_desired, angular_vel_desired, current_vel)
-        #steering = corrective_steer + predictive_steer
-        
         #rospy.logwarn("Cur steering value: {}".format(steering))
 
         vel_error = linear_vel_desired - current_vel
 
         throttle = self.throttle_controller.step(vel_error, sample_time)
+        throttle = self.vel_lpf.filt(throttle)
+        #rospy.logwarn("Cur velocity value: {}".format(throttle))
+
         brake = 0.0
         """
         if throttle > 0.0:
@@ -86,7 +92,7 @@ class Controller(object):
             # apply at least 700 Nm of torque 
             brake = max(700.0, abs(decel) * self.vehicle_mass * self.wheel_radius) 
         """
-        if linear_vel_desired == 0.0 and current_vel < 0.25:
+        if linear_vel_desired < 1.0 and current_vel < 1.0:
             throttle = 0.0 
             brake = 700.0 # Nm - torque to keep car standing still
         elif throttle < 0.1 and vel_error < 0.0:
