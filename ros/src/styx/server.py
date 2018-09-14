@@ -14,12 +14,8 @@ from conf import conf
 sio = socketio.Server()
 app = Flask(__name__)
 msgs = []
-
 dbw_enable = False
 
-@sio.on('connect')
-def connect(sid, environ):
-    print("connect ", sid)
 
 def send(topic, data):
     s = 1
@@ -28,12 +24,18 @@ def send(topic, data):
 
 bridge = Bridge(conf, send)
 
+
+@sio.on('connect')
+def connect(sid, environ):
+    print("connect ", sid)
+
 @sio.on('telemetry')
 def telemetry(sid, data):
     global dbw_enable
     if data["dbw_enable"] != dbw_enable:
         dbw_enable = data["dbw_enable"]
         bridge.publish_dbw_status(dbw_enable)
+
     bridge.publish_odometry(data)
     for i in range(len(msgs)):
         topic, data = msgs.pop(0)
@@ -65,4 +67,11 @@ if __name__ == '__main__':
     app = socketio.Middleware(sio, app)
 
     # deploy as an eventlet WSGI server
-    eventlet.wsgi.server(eventlet.listen(('', 4567)), app)
+    try:
+        eventlet.wsgi.server(eventlet.listen(('', 4567)), app)
+    except Exception as e:
+        print("Exception triggered: {}".format(str(e)))
+        import traceback
+        print(traceback.format_exc())
+
+    print("Ending styx server.py node!")

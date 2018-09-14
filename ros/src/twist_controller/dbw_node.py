@@ -113,7 +113,7 @@ class DBWNode(object):
     def twist_cb(self, msg):
         self.linear_vel = msg.twist.linear.x
         self.angular_vel = msg.twist.angular.z
-
+        #rospy.logwarn("Setting wp velocities: {}m/s/{}deg/s".format(msg.twist.linear.x, msg.twist.linear.z))
 
     def velocity_cb(self, msg):
         self.cur_vel = msg.twist.linear.x

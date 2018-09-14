@@ -24,12 +24,12 @@ as well as to verify your TL classifier.
 TODO (for Yousuf and Aaron): Stopline location for each traffic light.
 '''
 
-LOOKAHEAD_WPS = 200 # Number of waypoints we will publish. You can change this number
+LOOKAHEAD_WPS = 100 # Number of waypoints we will publish. You can change this number
 
 
 class WaypointUpdater(object):
     def __init__(self):
-        rospy.init_node('waypoint_updater')
+        rospy.init_node('waypoint_updater', log_level=rospy.DEBUG)
 
         # only start when waypoint publisher started!
         #msg = rospy.wait_for_message('/base_waypoints', Lane)
@@ -45,6 +45,8 @@ class WaypointUpdater(object):
         self.traffic_waypoint_idx = None
         self.obstacle_waypoint_idx = None
 
+        self.stop_commanded = False
+        self.cur_stop_waypoints = []
         rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
         rospy.Subscriber('/current_velocity', TwistStamped, self.velocity_cb)
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
@@ -91,28 +93,32 @@ class WaypointUpdater(object):
         farthest_idx   = closest_waypoint_idx+LOOKAHEAD_WPS
         base_waypoints = self.base_waypoints.waypoints[closest_waypoint_idx:farthest_idx]
 
-        if self.traffic_waypoint_idx and (0 <= self.traffic_waypoint_idx <= farthest_idx):
+        if 0 <= self.traffic_waypoint_idx <= farthest_idx:
+            #rospy.loginfo("Stop command set!")
             lane.waypoints = self.decelerate_waypoints(base_waypoints, closest_waypoint_idx)
         else:
-            self.set_stop_waypoints = False
+            #rospy.loginfo("Stop command reset!")
+            self.stop_commanded = False
             lane.waypoints = base_waypoints
 
         self.final_waypoints_pub.publish(lane)
 
     def decelerate_waypoints(self, waypoints, closest_waypoint_idx):
-        cur_stop_waypoints = []
+        
         velocity_init = waypoints[0].twist.twist.linear.x
         stop_idx = max(self.traffic_waypoint_idx - closest_waypoint_idx - int(self.cur_velocity.twist.linear.x * 2), 0)
-        
+        #if self.stop_commanded:
+        #    return self.cur_stop_waypoints
+
         """
         stop_idx = self.traffic_waypoint_idx - closest_waypoint_idx - int(self.cur_velocity.twist.linear.x * 1.5)
         # wrap around from 0 to end
         if stop_idx < 0:
             stop_idx += len(waypoints)
         """
-        rospy.logwarn("stop_wp: {}, rel_stop_wp before: {}, closest_idx: {}".format(self.traffic_waypoint_idx, stop_idx, closest_waypoint_idx))        
-        #rospy.logwarn("cur_wp: {}, stop_wp: {}, len(basic_wp): {}".format(0, stop_idx, len(waypoints)))
-
+        rospy.loginfo("stop_wp: {}, rel_stop_wp before: {}, closest_idx: {}".format(self.traffic_waypoint_idx, stop_idx, closest_waypoint_idx))        
+        #rospy.loginfo("cur_wp: {}, stop_wp: {}, len(basic_wp): {}".format(0, stop_idx, len(waypoints)))
+        self.cur_stop_waypoints = []
         coeff = velocity_init / (self.distance(waypoints, 0, stop_idx) + 1e-3)
         for i, wp in enumerate(waypoints):
             p = Waypoint()
@@ -122,11 +128,12 @@ class WaypointUpdater(object):
             velocity_reduced = math.sqrt(2 * abs(self.decel_limit) * dist)
             if velocity_reduced < 1.0:
                 velocity_reduced = 0.0
-            #rospy.logwarn("Setting WP {} lower velocity: {} (old: {})".format(i, velocity_reduced, wp.twist.twist.linear.x))
+            #rospy.loginfo("Setting WP {} lower velocity: {} (old: {})".format(i, velocity_reduced, wp.twist.twist.linear.x))
             p.twist.twist.linear.x = min(velocity_reduced, wp.twist.twist.linear.x)
-            cur_stop_waypoints.append(p)
-
-        return cur_stop_waypoints
+            self.cur_stop_waypoints.append(p)
+        #rospy.loginfo("All new WPs:\n{}".format(self.cur_stop_waypoints))
+        self.stop_commanded = True
+        return self.cur_stop_waypoints
 
     def pose_cb(self, msg):
         self.pose = msg

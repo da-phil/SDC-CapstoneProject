@@ -3,7 +3,6 @@ import numpy as np
 import cv2
 import tensorflow as tf
 from PIL import Image
-from matplotlib import pyplot as plt
 import time
 from glob import glob
 
@@ -16,78 +15,52 @@ class TLClassifier(object):
         self.hw_ratio = hw_ratio    #height_width ratio
         print("Initializing classifier with threshold={}, hw_ratio={}".format(threshold, hw_ratio))
         self.verbose = verbose
-        self.tl_bbox = None
-
-        self.num_pixels = 25
-        # Define red pixels in hsv color space
-        self.lower_red_1 = np.array([0,  70, 50],   dtype = "uint8")
-        self.upper_red_1 = np.array([10, 255, 255], dtype = "uint8")
-
-        self.lower_red_2 = np.array([170,  70,  50], dtype = "uint8")
-        self.upper_red_2 = np.array([180, 255, 255], dtype = "uint8")
-
         self.category_index = [{"id": 0, "name": "red"},
                                {"id": 1, "name": "yellow"},
                                {"id": 2, "name": "green"},
                                {"id": 3, "name": "unknown"},
                                {"id": 4, "name": "unknown"}]  
-
+        self.traffic_light_class = 10 # class id corresponding to traffic light in COCO dataset
         self.find_color_idx = lambda color: next((self.category_index[i]["id"]
                                             for i in range(len(self.category_index))
                                             if self.category_index[i]["name"] == color.lower()), 3)
 
         os.chdir(cwd)
-        
+
         #if sim_testing, we use a detection and classification models
         #if site_testing, we use a single model which does both detection and classification
-        
+
         if sim_testing: #we use different models for classification
-            #tensorflow localization/detection model
-            detect_model_name = "ssd_mobilenet_v1_coco_11_06_2017" #was "ssd_inception_v2_coco_11_06_2017"
+            detect_model_name = "ssd_mobilenet_v1_coco_11_06_2017"
             #detect_model_name = "ssd_mobilenet_v1_coco_28_01_2018"
             PATH_TO_CKPT = detect_model_name + "/frozen_inference_graph.pb"
-            # setup tensorflow graph
             self.detection_graph = tf.Graph()
-            # configuration for possible GPU
             config = tf.ConfigProto()
             config.gpu_options.allow_growth = True
-            # load frozen tensorflow detection model and initialize
-            # the tensorflow graph
-        
-        else: # site testing where we load the localization+classification model        
-            detect_model_name = "ssd_kyle_v4"
-            PATH_TO_CKPT = detect_model_name + "/frozen_inference_graph.pb"
-            # setup tensorflow graph
-            self.detection_graph = tf.Graph()
-        
-            # configuration for possible GPU use
-            config = tf.ConfigProto()
-            config.gpu_options.allow_growth = True
-            # load frozen tensorflow detection model and initialize 
-            # the tensorflow graph        
-        
+
         with self.detection_graph.as_default():
             od_graph_def = tf.GraphDef()
             with tf.gfile.GFile(PATH_TO_CKPT, "rb") as fid:
-               serialized_graph = fid.read()
-               od_graph_def.ParseFromString(serialized_graph)
+               od_graph_def.ParseFromString(fid.read())
                tf.import_graph_def(od_graph_def, name="")
 
             self.sess = tf.Session(graph=self.detection_graph, config=config)
             self.image_tensor = self.detection_graph.get_tensor_by_name("image_tensor:0")
-              # Each bbox represents a part of the image where a particular object was detected.
+
+            # Each bbox represents a part of the image where a particular object was detected.
             self.bboxes = self.detection_graph.get_tensor_by_name("detection_boxes:0")
-              # Each score represent how level of confidence for each of the objects.
-              # Score is shown on the result image, together with the class label.
+
+            # Each score represent how level of confidence for each of the objects.
+            # Score is shown on the result image, together with the class label.
             self.scores =self.detection_graph.get_tensor_by_name("detection_scores:0")
             self.classes = self.detection_graph.get_tensor_by_name("detection_classes:0")
             self.num_detections =self.detection_graph.get_tensor_by_name("num_detections:0")
 
-    # Helper function to convert normalized bbox coordinates to pixels
+    # convert normalized bbox coordinates to pixels
     def bbox_normal_to_pixel(self, bbox, dim):
         height, width = dim[0], dim[1]
         bbox_pixel = [int(bbox[0]*height), int(bbox[1]*width), int(bbox[2]*height), int(bbox[3]*width)]
-        return np.array(bbox_pixel)
+        return np.asarray(bbox_pixel)
 
     def get_localization(self, image, visual=False):
         """Determines the locations of the traffic light in the image
@@ -97,7 +70,6 @@ class TLClassifier(object):
 
         Returns:
             bounding box as list of integer coordinates [x_left, y_up, x_right, y_down]
-
         """
 
         with self.detection_graph.as_default():
@@ -117,7 +89,7 @@ class TLClassifier(object):
             bbox = [0, 0, 0, 0]
 
             # Find the first occurence of traffic light detection id=10
-            idx = next((i for i, v in enumerate(cls) if v == 10), None)
+            idx = next((i for i, v in enumerate(cls) if v == self.traffic_light_class), None)
 
             # If there is no detection
             if idx == None:
@@ -131,7 +103,7 @@ class TLClassifier(object):
 
             #If there is a detection and its confidence is high enough
             else:
-                # checking orner cases
+                # checking corner cases
                 dim = image.shape[0:2]
                 bbox = self.bbox_normal_to_pixel(bboxes[idx], dim)
                 bbox_h = bbox[2] - bbox[0]
@@ -154,12 +126,17 @@ class TLClassifier(object):
                     if self.verbose:
                         print("Localization confidence: {}".format(scores[idx]))
 
-            self.tl_bbox = bbox
-
         return bbox
 
 
     def get_trafficlight_color(self, image):
+        """ Detecting the traffic light color based on the vertical brightness
+            histogram over the detected image and using the amount of red and green pixels
+            to bias the detection either towards red or green.
+            In order to this work well a very tight bbox is expected, so that only the dark
+            frame of the traffic light goes all the way to the image border.
+        """
+
         brightness_threshold    = 128
 
         red_vals, green_vals    = image[:,:,0].ravel(), image[:,:,1].ravel()
@@ -247,6 +224,8 @@ if __name__ == "__main__":
         print("Detected light:      {}".format(tl_cls.category_index[signal]["name"]))
 
         if visual == True:
+            from matplotlib import pyplot as plt
+            
             # show bounding box image if box was detected and the whole image otherwise
             if np.array_equal(bbox, np.zeros(4)):
                 image_vis = img_full_np

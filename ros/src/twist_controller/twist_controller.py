@@ -26,7 +26,7 @@ class Controller(object):
         self.yaw_controller = YawController(wheel_base, steer_ratio, min_speed,
                                             max_lat_accel, max_steer_angle)
 
-        tau = 0.01 # 1/(2*pi*tau) = filter cutoff frequency
+        tau = 0.2 # 1/(2*pi*tau) = filter cutoff frequency
         ts = 0.02 # sample time
         self.vel_lpf = LowPassFilter(tau, ts)
 
@@ -38,7 +38,7 @@ class Controller(object):
         self.steer_controller = PID(self.steer_kp, self.steer_ki, self.steer_kd,
                                     self.steer_min, self.steer_max)
 
-        tau = 0.05 # 1/(2*pi*tau) = filter cutoff frequency
+        tau = 0.2 # 1/(2*pi*tau) = filter cutoff frequency
         ts = 0.02 # sample time
         self.steering_lpf = LowPassFilter(tau, ts)
 
